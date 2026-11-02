@@ -103,3 +103,8 @@ def test_store_status_open_and_closed():
     assert not sat_late["is_open"] and "segunda-feira" in sat_late["next_opening"]
     sun = store_status(datetime(2026, 3, 29, 11, 0, tzinfo=TIMEZONE))
     assert not sun["is_open"]
+
+
+def test_shared_email_is_not_resolved_to_a_single_customer(catalog):
+    assert "error" in catalog.find_customer_orders("bruno.martins@jmail.com")
+    assert catalog.get_order(10, "bruno.martins@jmail.com")["order_id"] == 10  # customer 11 still verifies per order

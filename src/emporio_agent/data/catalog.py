@@ -285,6 +285,8 @@ class Catalog:
         matches = [c for c in self.d.customers.itertuples() if self._verify(int(c.customer_id), proof)]
         if not matches:
             return {"error": "Nenhum cliente encontrado com esse e-mail/telefone."}
+        if len(matches) > 1:  # e.g. a shared e-mail: never guess whose orders to show
+            return {"error": "Mais de um cadastro corresponde a esse contato. Peça o número do pedido e use get_order_status."}
         c = matches[0]
         orders = self.d.orders[self.d.orders.customer_id == c.customer_id].sort_values("order_date")
         return {"customer_first_name": c.name.split()[0],
