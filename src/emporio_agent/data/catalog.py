@@ -113,11 +113,27 @@ class Catalog:
         else:
             view["promotion"] = None
             view["current_price"], view["current_price_text"] = price, brl(price)
-            view["pix_price_text"] = brl(round(price * (1 - PIX_DISCOUNT), 2))
-        view["max_interest_free_installments"] = max_interest_free_installments(final)
+            if sellable:
+                view["pix_price_text"] = brl(round(price * (1 - PIX_DISCOUNT), 2))
+        if sellable:
+            view["max_interest_free_installments"] = max_interest_free_installments(final)
         if detailed:
             view["description"] = row.description
             view["specs"] = row.specs
+        return view
+
+    def _alternatives(self, row, limit: int = 3) -> list[dict]:
+        """Available products of the same category with a similar price (manual 7.3)."""
+        df = self.d.products
+        df = df[(df.category_id == row.category_id) & (df.product_id != row.product_id)
+                & (df.status == "active") & (df.stock_quantity > 0)]
+        df = df.assign(_gap=(df.price_brl - row.price_brl).abs()).sort_values("_gap")
+        return [self._view(r) for r in df.head(limit).itertuples()]
+
+    def _detailed(self, row) -> dict:
+        view = self._view(row, detailed=True)
+        if not view["available_for_purchase"]:
+            view["suggested_alternatives"] = self._alternatives(row)
         return view
 
     def _category_ids(self, category: str | None) -> list[int] | None:
@@ -170,13 +186,13 @@ class Catalog:
             rows = df[df.product_id == int(product_id)]
             if rows.empty:
                 return {"error": f"Produto {product_id} não encontrado."}
-            return self._view(next(rows.itertuples()), detailed=True)
+            return self._detailed(next(rows.itertuples()))
         if not name:
             return {"error": "Informe product_id ou name."}
         qt = _tokens(name)
         hits = df[df["name"].map(lambda n: qt <= _tokens(n))] if qt else df.iloc[0:0]
         if len(hits) == 1:
-            return self._view(next(hits.itertuples()), detailed=True)
+            return self._detailed(next(hits.itertuples()))
         if len(hits) > 1:
             return {"ambiguous": True, "candidates": [self._view(r) for r in hits.head(5).itertuples()],
                     "note": "Vários produtos correspondem; pergunte ao cliente qual deles."}
@@ -232,14 +248,14 @@ class Catalog:
         view = {
             "order_id": int(o.order_id),
             "customer_first_name": customer.name.split()[0],
-            "order_date": o.order_date.isoformat(),
+            "placed_on": o.order_date.isoformat(),
             "status": STATUS_PT.get(o.status, o.status),
             "status_code": o.status,
             "total": brl(float(o.total_brl)),
             "payment_method": o.payment_method,
             "items": lines,
             "tracking_code": o.tracking_code if isinstance(o.tracking_code, str) else None,
-            "estimated_delivery": est.isoformat() if est else None,
+            "forecast_delivery_date": est.isoformat() if est else None,
             "notes": o.notes if isinstance(o.notes, str) else None,
         }
         if o.status == "delivered" and est:

@@ -15,7 +15,7 @@ POLICY_PDF = DATA_DIR / "politicas_da_loja.pdf"
 
 TIMEZONE = ZoneInfo("America/Campo_Grande")
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 
 MAX_TOOL_ITERATIONS = 6
