@@ -95,7 +95,7 @@ The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The polic
 ```bash
 python app_cli.py                      # interactive terminal chat
 streamlit run app_streamlit.py         # web chat UI (http://localhost:8501)
-pytest                                 # 60 deterministic tests (no network, no API key needed)
+pytest                                 # 65 deterministic tests (no network, no API key needed)
 RUN_LIVE=1 pytest tests/test_scenarios.py   # 8 live scenario checks against the real model
 ```
 
@@ -262,7 +262,7 @@ src/emporio_agent/
   policies/ingest.py        PDF -> section chunks
   policies/retriever.py     embeddings index + search (keyword fallback)
   history.py                SQLite conversation history (save, list, resume, delete)
-tests/                      60 unit tests (mocked LLM) + 8 live scenario tests
+tests/                      65 unit tests (mocked LLM) + 8 live scenario tests
 conversations/              5 example conversations (Markdown)
 demo_scripts/               the customer messages used to generate them
 ```

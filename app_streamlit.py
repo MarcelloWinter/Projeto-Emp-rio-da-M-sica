@@ -199,6 +199,44 @@ with st.sidebar:
                     st.session_state.conv_id = None
                 st.rerun()
 
+    with st.expander("⚙️ Modelo e provedor", expanded=not is_configured(settings)):
+        names = list(PRESETS)
+        provider = st.selectbox("Provedor", names,
+                                index=names.index(settings.provider) if settings.provider in names else 0,
+                                format_func=lambda n: PRESETS[n].label)
+        preset = PRESETS[provider]
+        same = provider == settings.provider
+        base_url = (st.text_input("Base URL", value=(settings.base_url or "") if same else "")
+                    if provider == "custom" else preset.base_url)
+        api_key = st.text_input("API key", type="password", value=settings.api_key if same else "",
+                                disabled=not preset.needs_key,
+                                help="Fica apenas na memória desta sessão; não é gravada em disco.")
+        fetched = st.session_state.get("fetched_models", {}).get(provider, [])
+        if st.button("🔄 Buscar modelos do provedor", use_container_width=True,
+                     disabled=preset.needs_key and not (api_key or "").strip(),
+                     help="Consulta o provedor e lista os modelos disponíveis para a sua chave."):
+            found = list_models(Settings(provider, (api_key or "").strip(), base_url or None, "", None))
+            st.session_state.setdefault("fetched_models", {})[provider] = found
+            fetched = found
+            st.caption(f"{len(found)} modelos encontrados." if found
+                       else "Não consegui listar os modelos; use as sugestões ou digite o nome.")
+        OTHER = "Outro (digitar o nome)…"
+        current = settings.model if same and settings.model else preset.model
+        options = model_choices(provider, current, fetched) + [OTHER]
+        choice = st.selectbox("Modelo", options, index=options.index(current) if current in options else 0)
+        model = (st.text_input("Nome do modelo", placeholder="ex.: meu-modelo-v1") if choice == OTHER else choice)
+        if preset.key_url:
+            st.caption(f"Obtenha uma chave em {preset.key_url}")
+        if not preset.embedding_model:
+            st.caption("Sem embeddings neste provedor: a busca de políticas usa palavras-chave.")
+        if st.button("Aplicar", type="primary", use_container_width=True):
+            st.session_state.settings = settings = Settings(
+                provider, (api_key or "").strip(), base_url or None, model.strip(),
+                settings.embedding_model if same else preset.embedding_model)
+            st.session_state.pop("agent", None)
+            new_chat()
+            st.rerun()
+
 # --------------------------------------------------------------------- hero
 badge = (f'<span class="dot on"></span> Loja aberta agora' if status["is_open"]
          else f'<span class="dot off"></span> Loja fechada · abre {status["next_opening"]}')

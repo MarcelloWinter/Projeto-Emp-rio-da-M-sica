@@ -65,8 +65,8 @@ def _stamp() -> str:
 
 
 class ConversationStore:
-    def __init__(self, path: Path = DB_PATH):
-        self.path = Path(path)
+    def __init__(self, path: Path | None = None):
+        self.path = Path(path or os.getenv("HISTORY_DB") or DB_PATH)  # HISTORY_DB lets tests/ops relocate the file
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.executescript(SCHEMA)
