@@ -4,8 +4,10 @@ Interactive:  python app_cli.py
 Scripted:     python app_cli.py --script demo.txt --save conversations/01_x.md --title "..."
               (one customer message per line; blank lines and lines starting with # are ignored)
 
-Commands inside the chat: /config (change provider/key/model), /reset (new conversation),
-/save [path] (export transcript), /tools (toggle tool trace), /quit
+Commands inside the chat: /history (list saved conversations), /resume N, /delete N, /config (change
+provider/key/model), /reset (new conversation), /save [path] (export transcript), /tools (toggle tool trace), /quit
+
+Conversations are saved automatically to logs/conversations.db in interactive mode (disable with SAVE_HISTORY=0).
 """
 import argparse
 import json
@@ -20,6 +22,7 @@ from rich.markdown import Markdown  # noqa: E402
 
 from emporio_agent.agent import Agent  # noqa: E402
 from emporio_agent.config import now  # noqa: E402
+from emporio_agent.history import ConversationStore, history_enabled  # noqa: E402
 from emporio_agent.llm_setup import interactive_setup, is_configured, load_settings  # noqa: E402
 
 console = Console()
@@ -70,6 +73,13 @@ def main() -> None:
     agent = Agent(settings=settings)
     turns: list[dict] = []
     show_tools = True
+    store = ConversationStore() if history_enabled() and not args.script else None  # demos/scripts are not logged
+    current = {"id": None, "listing": []}
+
+    def start_new_conversation() -> None:
+        agent.reset()
+        turns.clear()
+        current["id"] = None
 
     def ask(text: str) -> None:
         reply = agent.chat(text)
@@ -80,6 +90,16 @@ def main() -> None:
         console.print("[bold magenta]Mel:[/bold magenta]", Markdown(reply.text))
         if reply.error:
             console.print(f"[yellow]⚠ {reply.error}[/yellow]")
+        if store and reply.messages:  # only successful turns are saved
+            current["id"] = current["id"] or store.create(settings.provider, settings.model)
+            store.add_turn(current["id"], text, reply)
+
+    def pick(arg: str):
+        """Resolve '/resume 2' style arguments against the last /history listing."""
+        if not arg.strip().isdigit() or not 1 <= int(arg) <= len(current["listing"]):
+            console.print("[yellow]Use /history first, then /resume N or /delete N with a number from the list.[/yellow]")
+            return None
+        return current["listing"][int(arg) - 1]
 
     console.print(f"[dim]Provider: {settings.label} · model: {settings.model}[/dim]")
     console.print(f"[bold magenta]Mel:[/bold magenta] {GREETING}")
@@ -94,7 +114,7 @@ def main() -> None:
             console.print(f"[green]Saved → {save(turns, args.save, args.title)}[/green]")
         return
 
-    console.print("[dim]/config · /reset · /save <path> · /tools · /quit[/dim]")
+    console.print("[dim]/history · /resume N · /config · /reset · /save <path> · /tools · /quit[/dim]")
     while True:
         try:
             text = console.input("[bold cyan]Você:[/bold cyan] ").strip()
@@ -105,13 +125,38 @@ def main() -> None:
         if text == "/quit":
             break
         if text == "/reset":
-            agent.reset()
-            turns.clear()
+            start_new_conversation()
             console.print("[dim]Nova conversa iniciada.[/dim]")
+        elif text.split(" ")[0] in {"/history", "/resume", "/delete"}:
+            cmd, _, arg = text.partition(" ")
+            if not store:
+                console.print("[yellow]History is disabled (SAVE_HISTORY=0).[/yellow]")
+            elif cmd == "/history":
+                current["listing"] = store.recent()
+                if not current["listing"]:
+                    console.print("[dim]No saved conversations yet.[/dim]")
+                for i, c in enumerate(current["listing"], 1):
+                    console.print(f"  [bold]{i}.[/bold] {c.title}  [dim]({c.when} · {c.turns} msgs)[/dim]")
+            elif (chosen := pick(arg)) and cmd == "/resume":
+                saved = store.load(chosen.id)
+                agent.load_history([m for t in saved for m in t.messages])
+                turns[:] = [{"user": t.user, "reply": t.reply, "tools": t.tools} for t in saved]
+                current["id"] = chosen.id
+                console.print(f"[dim]Resumed: {chosen.title}[/dim]")
+                for t in saved:
+                    console.print(f"[bold cyan]Você:[/bold cyan] {t.user}")
+                    console.print("[bold magenta]Mel:[/bold magenta]", Markdown(t.reply))
+            elif chosen:  # /delete
+                store.delete(chosen.id)
+                if current["id"] == chosen.id:
+                    current["id"] = None
+                current["listing"] = store.recent()
+                console.print(f"[dim]Deleted: {chosen.title}. Run /history to refresh the numbers.[/dim]")
         elif text == "/config":
             settings = interactive_setup(settings)
             agent = Agent(settings=settings)
             turns.clear()
+            current["id"] = None
             console.print(f"[dim]Now using {settings.label} · {settings.model}. New conversation started.[/dim]")
         elif text.startswith("/save"):
             console.print(f"[green]Saved → {save(turns, text[5:].strip() or None, args.title)}[/green]")

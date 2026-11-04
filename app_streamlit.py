@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 import streamlit as st  # noqa: E402
 
 from emporio_agent.agent import Agent  # noqa: E402
+from emporio_agent.history import ConversationStore, history_enabled  # noqa: E402
 from emporio_agent.llm_setup import (PRESETS, Settings, is_configured, list_models, load_settings,  # noqa: E402
                                      model_choices)
 from emporio_agent.store_hours import store_status  # noqa: E402
@@ -101,6 +102,7 @@ div[data-testid="stChatInput"] > div, div[data-testid="stChatInput"] textarea {{
 div[data-testid="stChatInput"]:focus-within {{ border-color: {AMBER}; box-shadow: 0 0 0 3px rgba(232,145,45,.2); }}
 
 /* ---------- sidebar ---------- */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button {{ padding: .45rem .55rem; font-size: .85rem; }}
 section[data-testid="stSidebar"] {{ background: #F5EEE2; border-right: 1px solid #E9DFCF; }}
 .store-card {{ background: #fff; border-radius: 16px; padding: 1rem 1.05rem; border: 1px solid #EEE5D6;
   font-size: .88rem; line-height: 1.55; box-shadow: 0 2px 8px rgba(31,42,55,.05); }}
@@ -115,8 +117,14 @@ st.set_page_config(page_title="Empório da Música · Mel", page_icon="🎸", la
 st.markdown(CSS, unsafe_allow_html=True)
 
 
+@st.cache_resource
+def get_store() -> ConversationStore:
+    return ConversationStore()
+
+
 def new_chat() -> None:
     st.session_state.messages = [{"role": "assistant", "content": GREETING, "tools": []}]
+    st.session_state.conv_id = None  # created in the database lazily, on the first saved turn
 
 
 def tool_pills(tool_calls) -> None:
@@ -143,6 +151,7 @@ def render_message(m: dict, show_tools: bool) -> None:
 
 if "settings" not in st.session_state:  # first run of this browser session
     st.session_state.settings = load_settings()
+    st.session_state.save_history = history_enabled()
     new_chat()
 
 settings: Settings = st.session_state.settings
@@ -169,44 +178,26 @@ with st.sidebar:
         new_chat()
         st.rerun()
     show_tools = st.toggle("Mostrar consultas feitas pela Mel", value=True)
+    st.toggle("Salvar histórico das conversas", key="save_history",
+              help="Grava as conversas em logs/conversations.db (arquivo local, fora do Git). "
+                   "Podem conter dados pessoais de clientes.")
 
-    with st.expander("⚙️ Modelo e provedor", expanded=not is_configured(settings)):
-        names = list(PRESETS)
-        provider = st.selectbox("Provedor", names,
-                                index=names.index(settings.provider) if settings.provider in names else 0,
-                                format_func=lambda n: PRESETS[n].label)
-        preset = PRESETS[provider]
-        same = provider == settings.provider
-        base_url = (st.text_input("Base URL", value=(settings.base_url or "") if same else "")
-                    if provider == "custom" else preset.base_url)
-        api_key = st.text_input("API key", type="password", value=settings.api_key if same else "",
-                                disabled=not preset.needs_key,
-                                help="Fica apenas na memória desta sessão; não é gravada em disco.")
-        fetched = st.session_state.get("fetched_models", {}).get(provider, [])
-        if st.button("🔄 Buscar modelos do provedor", use_container_width=True,
-                     disabled=preset.needs_key and not (api_key or "").strip(),
-                     help="Consulta o provedor e lista os modelos disponíveis para a sua chave."):
-            found = list_models(Settings(provider, (api_key or "").strip(), base_url or None, "", None))
-            st.session_state.setdefault("fetched_models", {})[provider] = found
-            fetched = found
-            st.caption(f"{len(found)} modelos encontrados." if found
-                       else "Não consegui listar os modelos; use as sugestões ou digite o nome.")
-        OTHER = "Outro (digitar o nome)…"
-        current = settings.model if same and settings.model else preset.model
-        options = model_choices(provider, current, fetched) + [OTHER]
-        choice = st.selectbox("Modelo", options, index=options.index(current) if current in options else 0)
-        model = (st.text_input("Nome do modelo", placeholder="ex.: meu-modelo-v1") if choice == OTHER else choice)
-        if preset.key_url:
-            st.caption(f"Obtenha uma chave em {preset.key_url}")
-        if not preset.embedding_model:
-            st.caption("Sem embeddings neste provedor: a busca de políticas usa palavras-chave.")
-        if st.button("Aplicar", type="primary", use_container_width=True):
-            st.session_state.settings = settings = Settings(
-                provider, (api_key or "").strip(), base_url or None, model.strip(),
-                settings.embedding_model if same else preset.embedding_model)
-            st.session_state.pop("agent", None)
-            new_chat()
-            st.rerun()
+    saved_list = get_store().recent(limit=12)
+    with st.expander(f"💬 Conversas anteriores ({len(saved_list)})", expanded=False):
+        if not saved_list:
+            st.caption("Nenhuma conversa salva ainda.")
+        for c in saved_list:
+            open_col, del_col = st.columns([4, 1])
+            title = c.title if len(c.title) <= 26 else c.title[:25].rstrip() + "…"
+            if open_col.button(title, key=f"open_{c.id}", help=c.title, use_container_width=True):
+                st.session_state.resume_id = c.id
+                st.rerun()
+            open_col.caption(f"{c.when} · {c.turns} {'mensagem' if c.turns == 1 else 'mensagens'}")
+            if del_col.button("×", key=f"del_{c.id}", help="Apagar esta conversa", use_container_width=True):
+                get_store().delete(c.id)
+                if st.session_state.conv_id == c.id:
+                    st.session_state.conv_id = None
+                st.rerun()
 
 # --------------------------------------------------------------------- hero
 badge = (f'<span class="dot on"></span> Loja aberta agora' if status["is_open"]
@@ -229,6 +220,14 @@ if not is_configured(settings):
 if "agent" not in st.session_state:
     st.session_state.agent = Agent(settings=settings)
 agent = st.session_state.agent
+
+if resume_id := st.session_state.pop("resume_id", None):  # reopen a saved conversation and keep its context
+    saved = get_store().load(resume_id)
+    agent.load_history([m for t in saved for m in t.messages])
+    st.session_state.messages = [{"role": "assistant", "content": GREETING, "tools": []}] + [
+        m for t in saved for m in ({"role": "user", "content": t.user, "tools": []},
+                                   {"role": "assistant", "content": t.reply, "tools": t.tools})]
+    st.session_state.conv_id = resume_id
 
 # ------------------------------------------------------------------ the chat
 typed = st.chat_input("Escreva sua mensagem para a Mel…")
@@ -260,3 +259,10 @@ if prompt:
         if show_tools and reply.tool_calls:
             tool_pills(reply.tool_calls)
     st.session_state.messages.append({"role": "assistant", "content": reply.text, "tools": reply.tool_calls})
+    if st.session_state.save_history and reply.messages:  # only successful turns are saved
+        first_turn = st.session_state.conv_id is None
+        if first_turn:
+            st.session_state.conv_id = get_store().create(settings.provider, settings.model)
+        get_store().add_turn(st.session_state.conv_id, prompt, reply)
+        if first_turn:
+            st.rerun()  # refresh the sidebar list so the new conversation shows up
