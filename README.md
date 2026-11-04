@@ -44,7 +44,7 @@ source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.
                                    # Windows Git Bash:   source .venv/Scripts/activate
 
 # 2. install dependencies
-pip install -r requirements.txt
+python -m pip install -r requirements.txt   # "python -m pip" guarantees the packages go into the active virtual environment
 
 # 3. run it — on first run the CLI asks for provider, API key and model, and offers to save them to .env
 python app_cli.py
