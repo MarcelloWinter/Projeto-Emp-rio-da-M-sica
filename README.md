@@ -198,7 +198,11 @@ The prompt was iterated by running scripted conversations and reading the transc
 ### Interface and conversation history
 
 - **CLI** (`rich`) with transcript export — handy for demos and for producing the example conversations.
-- **Streamlit** chat UI with an optional "tools used" panel for transparency.
+- **Streamlit** chat UI (`streamlit run app_streamlit.py`): branded theme, live "store open/closed" badge, one-click suggested questions, chat bubbles, a store-info sidebar, provider/model settings, and an optional "tools used" badge per answer (with the exact calls) for transparency. Messages are HTML-escaped and `$` is escaped so prices such as `R$ 2.199,00` are not parsed as LaTeX. Each browser session owns its own agent and history (never shared between visitors).
+
+| Home | Conversation |
+|---|---|
+| ![Home](docs/ui-home.png) | ![Chat](docs/ui-chat.png) |
 - **History:** kept in memory per session (the full turn, including tool calls/results, so follow-ups like "and the PIX price?" work). It is trimmed by whole turns when it gets long, and a failed turn (API error) is rolled back so the conversation is never left in a broken state. Persisting history across restarts was not needed for a prototype — see limitations.
 
 ### Data handling and assumptions
