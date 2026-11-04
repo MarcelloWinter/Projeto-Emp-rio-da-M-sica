@@ -56,8 +56,8 @@ You do not have to edit any file by hand (the key is typed hidden), but you can:
 
 The agent talks to any provider that exposes an **OpenAI-compatible Chat Completions API with tool calling**. You can set it up three ways:
 
-- **CLI wizard:** runs automatically when no valid key is found; run `/config` inside the chat to change provider/key/model later.
-- **Streamlit sidebar:** pick the provider, paste the key, set the model, click *Apply*. The key is kept only in that browser session's memory — never written to disk or logs.
+- **CLI wizard:** runs automatically when no valid key is found; run `/config` inside the chat to change provider/key/model later. After you type the key it fetches the models available to it and shows a numbered menu (type a number, or any other model name).
+- **Streamlit sidebar:** pick the provider and the **model from a dropdown** (curated suggestions per provider; *Buscar modelos do provedor* fetches the full list available to your key; *Outro…* lets you type any name), paste the key and click *Apply*. The key is kept only in that browser session's memory — never written to disk or logs.
 - **`.env`** (below).
 
 | Preset | Base URL | Default model | Policy search |
@@ -71,6 +71,8 @@ The agent talks to any provider that exposes an **OpenAI-compatible Chat Complet
 | `ollama` (local, no key) | `localhost:11434/v1` | `llama3.1` | keyword fallback |
 | `custom` | any URL you provide | any model you provide | keyword fallback |
 
+> **Models verified end to end** (same product question, correct tool call and price): OpenAI `gpt-4.1-mini` (default), `gpt-4.1`, `gpt-4o-mini`, `gpt-4o`, `gpt-5-mini`, `gpt-5`, `gpt-5.4-mini`. GPT-5-family models reject a custom `temperature`; the agent detects this and retries with the default. Models marked deprecated by the provider (e.g. `gpt-4.1-nano` at the time of writing) still appear in provider lists but return 404.
+>
 > **Honest caveats.** Only **OpenAI was tested end to end**; the other presets are convenience defaults (model names change over time — type any model you like). Answer quality depends on the model: small or local models are noticeably worse at tool calling and at following the grounding rules. Providers without an embeddings endpoint use keyword matching for the policy search (lower recall); set `LLM_EMBEDDING_MODEL` if yours offers one.
 
 `.env` (never committed — it is in `.gitignore`):
@@ -92,7 +94,7 @@ The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The polic
 ```bash
 python app_cli.py                      # interactive terminal chat
 streamlit run app_streamlit.py         # web chat UI (http://localhost:8501)
-pytest                                 # 44 deterministic tests (no network, no API key needed)
+pytest                                 # 49 deterministic tests (no network, no API key needed)
 RUN_LIVE=1 pytest tests/test_scenarios.py   # 8 live scenario checks against the real model
 ```
 
@@ -245,7 +247,7 @@ src/emporio_agent/
   data/catalog.py           products, promotions, orders, business rules
   policies/ingest.py        PDF -> section chunks
   policies/retriever.py     embeddings index + search (keyword fallback)
-tests/                      44 unit tests (mocked LLM) + 8 live scenario tests
+tests/                      49 unit tests (mocked LLM) + 8 live scenario tests
 conversations/              5 example conversations (Markdown)
 demo_scripts/               the customer messages used to generate them
 ```
