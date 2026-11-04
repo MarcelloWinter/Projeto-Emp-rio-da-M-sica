@@ -29,7 +29,7 @@ customer message
 
 ### Requirements
 - Python 3.10+ (developed and tested with 3.12)
-- An OpenAI API key
+- An API key from an LLM provider (OpenAI by default; see [Choosing a provider and model](#choosing-a-provider-and-model))
 
 ### Setup
 
@@ -46,18 +46,43 @@ source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.
 # 2. install dependencies
 pip install -r requirements.txt
 
-# 3. configure the model provider
-cp .env.example .env               # Windows PowerShell: Copy-Item .env.example .env
-# then edit .env and set OPENAI_API_KEY
+# 3. run it — on first run the CLI asks for provider, API key and model, and offers to save them to .env
+python app_cli.py
 ```
+
+You do not have to edit any file by hand (the key is typed hidden), but you can: `cp .env.example .env` (PowerShell: `Copy-Item .env.example .env`) and fill it in.
+
+### Choosing a provider and model
+
+The agent talks to any provider that exposes an **OpenAI-compatible Chat Completions API with tool calling**. You can set it up three ways:
+
+- **CLI wizard:** runs automatically when no valid key is found; run `/config` inside the chat to change provider/key/model later.
+- **Streamlit sidebar:** pick the provider, paste the key, set the model, click *Apply*. The key is kept only in that browser session's memory — never written to disk or logs.
+- **`.env`** (below).
+
+| Preset | Base URL | Default model | Policy search |
+|---|---|---|---|
+| `openai` (default) | OpenAI | `gpt-4.1-mini` | embeddings (`text-embedding-3-small`) |
+| `gemini` | `generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | keyword fallback |
+| `groq` | `api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | keyword fallback |
+| `openrouter` | `openrouter.ai/api/v1` | `openai/gpt-4.1-mini` | keyword fallback |
+| `deepseek` | `api.deepseek.com` | `deepseek-chat` | keyword fallback |
+| `mistral` | `api.mistral.ai/v1` | `mistral-small-latest` | keyword fallback |
+| `ollama` (local, no key) | `localhost:11434/v1` | `llama3.1` | keyword fallback |
+| `custom` | any URL you provide | any model you provide | keyword fallback |
+
+> **Honest caveats.** Only **OpenAI was tested end to end**; the other presets are convenience defaults (model names change over time — type any model you like). Answer quality depends on the model: small or local models are noticeably worse at tool calling and at following the grounding rules. Providers without an embeddings endpoint use keyword matching for the policy search (lower recall); set `LLM_EMBEDDING_MODEL` if yours offers one.
 
 `.env` (never committed — it is in `.gitignore`):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | — (required) | OpenAI credentials |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | Chat model used by the agent |
-| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embeddings for policy retrieval |
+| `LLM_PROVIDER` | `openai` | One of the presets above |
+| `LLM_API_KEY` | — (required, except `ollama`) | Provider credentials |
+| `LLM_MODEL` | preset default | Chat model used by the agent |
+| `LLM_BASE_URL` | preset default | Required for `custom` |
+| `LLM_EMBEDDING_MODEL` | preset default (`text-embedding-3-small` for OpenAI, none otherwise) | Embeddings for policy retrieval |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | — | Legacy names, still honoured when the provider is `openai` |
 | `AGENT_NOW` | *(unset)* | Optional. Pins the agent's clock, e.g. `2026-03-23T10:30` (see [Demo clock](#demo-clock)) |
 
 The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The policy embedding index is built on first use and cached in `.cache/` (a few cents at most; rebuilt automatically if the PDF changes).
@@ -67,13 +92,13 @@ The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The polic
 ```bash
 python app_cli.py                      # interactive terminal chat
 streamlit run app_streamlit.py         # web chat UI (http://localhost:8501)
-pytest                                 # 30 deterministic tests (no network, no API key needed)
+pytest                                 # 44 deterministic tests (no network, no API key needed)
 RUN_LIVE=1 pytest tests/test_scenarios.py   # 8 live scenario checks against the real model
 ```
 
 PowerShell equivalent for the live tests: `$env:RUN_LIVE=1; pytest tests/test_scenarios.py`.
 
-CLI commands inside the chat: `/reset` (new conversation), `/save [path]` (export the transcript as Markdown), `/tools` (toggle the tool-call trace), `/quit`.
+CLI commands inside the chat: `/config` (change provider/key/model), `/reset` (new conversation), `/save [path]` (export the transcript as Markdown), `/tools` (toggle the tool-call trace), `/quit`.
 
 Scripted run (used to produce the example conversations):
 
@@ -128,7 +153,9 @@ The model itself decides *which* source to consult — that is the "knows when t
 
 **Why not LangChain / LangGraph?** The agent loop is ~40 lines on top of the OpenAI SDK ([`agent.py`](src/emporio_agent/agent.py)). A framework would add dependencies and indirection without adding capability for a single-agent, single-loop problem, and a hand-written loop is easy to read, test (the LLM is mocked in the unit tests) and debug. It would be the right call if the system grew to multi-agent flows or needed durable checkpointing.
 
-### Model and provider: OpenAI `gpt-4.1-mini` (+ `text-embedding-3-small`)
+### Model and provider: provider-agnostic, OpenAI `gpt-4.1-mini` by default
+
+- **Provider-agnostic by design:** the OpenAI SDK accepts a custom `base_url`, so one code path covers OpenAI, Gemini, Groq, OpenRouter, DeepSeek, Mistral, Ollama or any compatible endpoint. Provider, key and model are chosen at run time (wizard, sidebar or `.env`) — nothing is hard-coded, and first-run failures (missing/placeholder key, wrong model) produce an actionable message instead of a stack trace. Only OpenAI is verified; see the caveats in section 1.
 
 - Reliable native tool calling and good pt-BR, at low latency and cost — appropriate for a high-volume support channel.
 - I compared `gpt-4o-mini` and `gpt-4.1-mini` on my scenarios; `gpt-4.1-mini` was noticeably better at applying order/return rules to the customer's case. The model is a single env var, so it is trivial to swap (e.g. to a larger model for harder cases).
@@ -204,7 +231,8 @@ app_cli.py                  terminal chat (+ scripted mode and transcript export
 app_streamlit.py            Streamlit chat UI
 data/                       CSVs + policy PDF (as provided)
 src/emporio_agent/
-  config.py                 env vars, paths, timezone, pinned clock
+  config.py                 paths, timezone, pinned clock
+  llm_setup.py              provider presets, env loading, first-run wizard, friendly errors
   prompts.py                system prompt builder
   agent.py                  tool-calling loop, history, error handling
   tools.py                  tool JSON schemas + dispatcher
@@ -213,7 +241,7 @@ src/emporio_agent/
   data/catalog.py           products, promotions, orders, business rules
   policies/ingest.py        PDF -> section chunks
   policies/retriever.py     embeddings index + search (keyword fallback)
-tests/                      30 unit tests (mocked LLM) + 8 live scenario tests
+tests/                      44 unit tests (mocked LLM) + 8 live scenario tests
 conversations/              5 example conversations (Markdown)
 demo_scripts/               the customer messages used to generate them
 ```
@@ -231,6 +259,7 @@ demo_scripts/               the customer messages used to generate them
 - **No streaming, rate limiting or cost tracking**; one OpenAI call per loop iteration (max 6 iterations per message).
 - **Holidays, shipping quotes and legal edge cases** are not modelled; the agent should defer to the team.
 - Language handling is pt-BR only by design.
+- **Non-OpenAI providers are untested** (I only had an OpenAI key), and they have no embeddings preset, so policy search degrades to keyword matching there.
 
 **With more time**
 1. **WhatsApp Business API integration** (webhook behind FastAPI) with the sender's phone number as the identity signal, plus handoff to a human agent with the conversation summary.
