@@ -6,6 +6,7 @@ presets are convenience defaults, and the model names may change over time (edit
 """
 import getpass
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -23,22 +24,28 @@ class Preset:
     embedding_model: str | None  # None -> policy search falls back to keyword matching
     needs_key: bool = True
     key_url: str = ""
+    models: tuple[str, ...] = ()  # suggestions for the dropdown; the first one is the default
 
 
 PRESETS: dict[str, Preset] = {
     "openai": Preset("OpenAI", None, "gpt-4.1-mini", "text-embedding-3-small",
-                     key_url="https://platform.openai.com/api-keys"),
+                     key_url="https://platform.openai.com/api-keys",
+                     models=("gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5", "gpt-5.4-mini")),
     "gemini": Preset("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/",
-                     "gemini-2.5-flash", None, key_url="https://aistudio.google.com/apikey"),
+                     "gemini-2.5-flash", None, key_url="https://aistudio.google.com/apikey",
+                     models=("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro")),
     "groq": Preset("Groq", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", None,
-                   key_url="https://console.groq.com/keys"),
+                   key_url="https://console.groq.com/keys", models=("llama-3.3-70b-versatile", "llama-3.1-8b-instant")),
     "openrouter": Preset("OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4.1-mini", None,
-                         key_url="https://openrouter.ai/keys"),
+                         key_url="https://openrouter.ai/keys",
+                         models=("openai/gpt-4.1-mini", "openai/gpt-4o-mini", "google/gemini-2.5-flash")),
     "deepseek": Preset("DeepSeek", "https://api.deepseek.com", "deepseek-chat", None,
-                       key_url="https://platform.deepseek.com/api_keys"),
+                       key_url="https://platform.deepseek.com/api_keys", models=("deepseek-chat",)),
     "mistral": Preset("Mistral", "https://api.mistral.ai/v1", "mistral-small-latest", None,
-                      key_url="https://console.mistral.ai/api-keys"),
-    "ollama": Preset("Ollama (local, no key)", "http://localhost:11434/v1", "llama3.1", None, needs_key=False),
+                      key_url="https://console.mistral.ai/api-keys",
+                      models=("mistral-small-latest", "mistral-large-latest")),
+    "ollama": Preset("Ollama (local, no key)", "http://localhost:11434/v1", "llama3.1", None, needs_key=False,
+                      models=("llama3.1", "qwen2.5", "mistral")),
     "custom": Preset("Other (any OpenAI-compatible endpoint)", None, "", None),
 }
 
@@ -83,6 +90,29 @@ def make_client(s: Settings) -> OpenAI:
     return OpenAI(api_key=s.api_key or "not-needed", base_url=s.base_url)
 
 
+_NON_CHAT = ("embed", "whisper", "tts", "dall-e", "moderation", "image", "audio", "realtime", "transcribe",
+             "search", "instruct", "codex", "live", "translate", "davinci", "babbage", "rerank", "guard", "sora")
+
+
+def list_models(s: Settings) -> list[str]:
+    """Ask the provider which models the key can use (best effort; [] on any failure)."""
+    try:
+        ids = sorted({m.id for m in make_client(s).models.list()})
+    except Exception:
+        return []
+    return [i for i in ids if not any(t in i.lower() for t in _NON_CHAT)
+            and not re.search(r"-\d{4}-\d{2}-\d{2}$|-\d{4}$", i)]  # hide dated snapshots to keep the list short
+
+
+def model_choices(provider: str, current: str = "", fetched=()) -> list[str]:
+    """Suggested models first, then anything fetched from the provider, always including the current one."""
+    choices = list(PRESETS.get(provider, PRESETS["custom"]).models)
+    choices += [m for m in fetched if m not in choices]
+    if current and current not in choices:
+        choices.insert(0, current)
+    return choices
+
+
 def describe_error(exc: Exception) -> str:
     """Operator-facing hint for the most common setup failures."""
     if isinstance(exc, AuthenticationError):
@@ -121,7 +151,7 @@ def apply_to_environ(s: Settings) -> None:
 
 
 def interactive_setup(current: Settings | None = None, input_fn=input, secret_fn=getpass.getpass,
-                      out=print, env_path: Path = ENV_PATH) -> Settings:
+                      out=print, env_path: Path = ENV_PATH, list_models_fn=list_models) -> Settings:
     """Ask for provider, key and model; offer to save them to .env. The key is typed hidden."""
     current = current or load_settings()
     names = list(PRESETS)
@@ -142,7 +172,14 @@ def interactive_setup(current: Settings | None = None, input_fn=input, secret_fn
             out(f"Get a key at: {preset.key_url}")
         key = secret_fn("API key (input hidden): ").strip()
     default_model = current.model if provider == current.provider and current.model else preset.model
-    model = input_fn(f"Model [{default_model}]: ").strip() or default_model
+    fetched = list_models_fn(Settings(provider, key, base_url, default_model, None)) if (key or not preset.needs_key) else []
+    choices = model_choices(provider, default_model, fetched)
+    if choices:
+        out("\nAvailable models (type a number, or type any other model name):")
+        for i, name in enumerate(choices, 1):
+            out(f"  {i}. {name}" + ("  (default)" if name == default_model else ""))
+    raw = input_fn(f"Model [{default_model}]: ").strip()
+    model = choices[int(raw) - 1] if raw.isdigit() and 1 <= int(raw) <= len(choices) else (raw or default_model)
 
     settings = Settings(provider, key, base_url, model, preset.embedding_model)
     if provider == current.provider and current.embedding_model:

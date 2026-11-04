@@ -1,4 +1,6 @@
 """Tests for provider presets, env loading, the first-run wizard and friendly error handling."""
+import os
+
 import pytest
 
 try:  # newer openai releases ship their own fork of httpx
@@ -9,7 +11,7 @@ from openai import AuthenticationError
 
 from emporio_agent.agent import Agent
 from emporio_agent.llm_setup import (PRESETS, Settings, describe_error, interactive_setup, is_configured,
-                                     load_settings, make_client, save_env)
+                                     list_models, load_settings, make_client, model_choices, save_env)
 from emporio_agent.policies.retriever import PolicyRetriever
 from emporio_agent.tools import ToolRegistry
 
@@ -18,9 +20,18 @@ ENV_VARS = ["LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL", "LLM_EMB
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
+def clean_env():
+    """Run each test with no LLM_*/OPENAI_* variables and restore the real ones afterwards
+    (save_env/apply_to_environ write to os.environ directly, which monkeypatch cannot undo)."""
+    saved = {v: os.environ.get(v) for v in ENV_VARS}
     for var in ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
+        os.environ.pop(var, None)
+    yield
+    for var, value in saved.items():
+        if value is None:
+            os.environ.pop(var, None)
+        else:
+            os.environ[var] = value
 
 
 def test_defaults_to_openai_with_embeddings():
@@ -71,12 +82,12 @@ def test_save_env_upserts_and_preserves_other_lines(tmp_path):
     assert load_settings().provider == "gemini"  # applied to the running process too
 
 
-def _wizard(tmp_path, answers, secret="sk-typed"):
+def _wizard(tmp_path, answers, secret="sk-typed", fetched=None):
     answers = iter(answers)
     out = []
     s = interactive_setup(current=Settings("openai", "", None, "gpt-4.1-mini", "text-embedding-3-small"),
                           input_fn=lambda _prompt: next(answers), secret_fn=lambda _prompt: secret,
-                          out=out.append, env_path=tmp_path / ".env")
+                          out=out.append, env_path=tmp_path / ".env", list_models_fn=lambda _s: fetched or [])
     return s, out
 
 
@@ -123,3 +134,61 @@ def test_auth_error_gives_actionable_hint_and_clean_rollback():
 def test_retriever_without_embedding_model_uses_keywords_silently():
     r = PolicyRetriever(client=object(), embedding_model=None)
     assert r.search("garantia legal 90 dias")[0]["method"] == "keyword"
+
+
+def test_model_choices_orders_suggestions_fetched_and_current():
+    assert model_choices("openai")[0] == "gpt-4.1-mini"
+    merged = model_choices("openai", "my-ft-model", fetched=["gpt-4.1", "brand-new"])
+    assert merged[0] == "my-ft-model" and "brand-new" in merged and merged.count("gpt-4.1") == 1
+    assert model_choices("custom", "") == []
+
+
+def test_wizard_model_menu_accepts_number_name_or_default(tmp_path):
+    names = list(PRESETS)
+    openai_choices = model_choices("openai", "gpt-4.1-mini")
+    s, out = _wizard(tmp_path, ["1", "2", "n"])
+    assert s.model == openai_choices[1] and any("1. gpt-4.1-mini" in line for line in out)
+    s, _ = _wizard(tmp_path, ["1", "my-own-model", "n"])
+    assert s.model == "my-own-model"
+    s, _ = _wizard(tmp_path, ["1", "", "n"])
+    assert s.model == "gpt-4.1-mini"
+    s, out = _wizard(tmp_path, [str(names.index("groq") + 1), "3", "n"], fetched=["llama-extra"])
+    assert s.model == "llama-extra" and any("llama-extra" in line for line in out)
+
+
+def test_list_models_hides_non_chat_and_dated_snapshots(monkeypatch):
+    ids = ["gpt-4.1", "gpt-4.1-2025-04-14", "text-embedding-3-small", "whisper-1", "gpt-image-1", "sora-2", "o3"]
+    fake = type("C", (), {"models": type("M", (), {"list": staticmethod(lambda: [type("X", (), {"id": i}) for i in ids])})})()
+    monkeypatch.setattr("emporio_agent.llm_setup.make_client", lambda _s: fake)
+    assert list_models(Settings("openai", "k", None, "m", None)) == ["gpt-4.1", "o3"]
+
+
+def test_list_models_returns_empty_on_failure(monkeypatch):
+    def boom(_s):
+        raise RuntimeError("offline")
+    monkeypatch.setattr("emporio_agent.llm_setup.make_client", boom)
+    assert list_models(Settings("openai", "k", None, "m", None)) == []
+
+
+def test_agent_retries_without_temperature_for_models_that_reject_it():
+    from types import SimpleNamespace
+    from openai import BadRequestError
+
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "temperature" in kwargs:
+            request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+            raise BadRequestError("Unsupported value: 'temperature' does not support 0.3 with this model.",
+                                  response=httpx.Response(400, request=request), body=None)
+        msg = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    agent = Agent(client=client, settings=Settings("openai", "k", None, "gpt-5-mini", None),
+                  tools=ToolRegistry(retriever=PolicyRetriever(client=None)))
+    assert agent.chat("oi").text == "ok"
+    agent.chat("de novo")
+    assert "temperature" in calls[0] and "temperature" not in calls[1]
+    assert all("temperature" not in c for c in calls[2:])  # remembered: no more failed attempts

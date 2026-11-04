@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 import streamlit as st  # noqa: E402
 
 from emporio_agent.agent import Agent  # noqa: E402
-from emporio_agent.llm_setup import PRESETS, Settings, is_configured, load_settings  # noqa: E402
+from emporio_agent.llm_setup import (PRESETS, Settings, is_configured, list_models, load_settings,  # noqa: E402
+                                     model_choices)
 from emporio_agent.store_hours import store_status  # noqa: E402
 
 GREETING = ("Oi! Eu sou a **Mel**, assistente virtual da Empório da Música 🎸 Posso ajudar com **preços e estoque**, "
@@ -181,7 +182,20 @@ with st.sidebar:
         api_key = st.text_input("API key", type="password", value=settings.api_key if same else "",
                                 disabled=not preset.needs_key,
                                 help="Fica apenas na memória desta sessão; não é gravada em disco.")
-        model = st.text_input("Modelo", value=settings.model if same and settings.model else preset.model)
+        fetched = st.session_state.get("fetched_models", {}).get(provider, [])
+        if st.button("🔄 Buscar modelos do provedor", use_container_width=True,
+                     disabled=preset.needs_key and not (api_key or "").strip(),
+                     help="Consulta o provedor e lista os modelos disponíveis para a sua chave."):
+            found = list_models(Settings(provider, (api_key or "").strip(), base_url or None, "", None))
+            st.session_state.setdefault("fetched_models", {})[provider] = found
+            fetched = found
+            st.caption(f"{len(found)} modelos encontrados." if found
+                       else "Não consegui listar os modelos; use as sugestões ou digite o nome.")
+        OTHER = "Outro (digitar o nome)…"
+        current = settings.model if same and settings.model else preset.model
+        options = model_choices(provider, current, fetched) + [OTHER]
+        choice = st.selectbox("Modelo", options, index=options.index(current) if current in options else 0)
+        model = (st.text_input("Nome do modelo", placeholder="ex.: meu-modelo-v1") if choice == OTHER else choice)
         if preset.key_url:
             st.caption(f"Obtenha uma chave em {preset.key_url}")
         if not preset.embedding_model:

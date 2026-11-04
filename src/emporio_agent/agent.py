@@ -3,7 +3,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from openai import OpenAI, OpenAIError
+from openai import BadRequestError, OpenAI, OpenAIError
 
 from .config import MAX_HISTORY_MESSAGES, MAX_TOOL_ITERATIONS
 from .llm_setup import Settings, describe_error, load_settings, make_client
@@ -40,6 +40,7 @@ class Agent:
         self.tools = tools or ToolRegistry(retriever=PolicyRetriever(
             self.client, embedding_model=self.settings.embedding_model))
         self.history: list[dict] = []
+        self._temperature: float | None = 0.3  # dropped automatically for models that only accept the default
 
     def reset(self) -> None:
         self.history.clear()
@@ -52,18 +53,28 @@ class Agent:
                 break
             del self.history[:next_user]
 
+    def _complete(self, messages: list[dict]):
+        """One chat call. Some models (e.g. GPT-5 / reasoning families) reject a custom temperature: retry without it."""
+        kwargs = {"model": self.model, "messages": messages, "tools": TOOL_SCHEMAS}
+        if self._temperature is not None:
+            kwargs["temperature"] = self._temperature
+        try:
+            return self.client.chat.completions.create(**kwargs)
+        except BadRequestError as exc:
+            if self._temperature is None or "temperature" not in str(exc).lower():
+                raise
+            log.info("Model %s does not accept a custom temperature; retrying with the default", self.model)
+            self._temperature = None
+            kwargs.pop("temperature")
+            return self.client.chat.completions.create(**kwargs)
+
     def chat(self, user_message: str) -> Reply:
         checkpoint = len(self.history)
         self.history.append({"role": "user", "content": user_message})
         traces: list[ToolTrace] = []
         try:
             for _ in range(MAX_TOOL_ITERATIONS):
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "system", "content": build_system_prompt()}, *self.history],
-                    tools=TOOL_SCHEMAS,
-                    temperature=0.3,
-                )
+                response = self._complete([{"role": "system", "content": build_system_prompt()}, *self.history])
                 msg = response.choices[0].message
                 if not msg.tool_calls:
                     text = (msg.content or "").strip() or FALLBACK_REPLY
