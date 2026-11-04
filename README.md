@@ -85,6 +85,7 @@ The agent talks to any provider that exposes an **OpenAI-compatible Chat Complet
 | `LLM_BASE_URL` | preset default | Required for `custom` |
 | `LLM_EMBEDDING_MODEL` | preset default (`text-embedding-3-small` for OpenAI, none otherwise) | Embeddings for policy retrieval |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | — | Legacy names, still honoured when the provider is `openai` |
+| `SAVE_HISTORY` | `1` | Set to `0` to stop saving conversations (see [Conversation history](#conversation-history)) |
 | `AGENT_NOW` | *(unset)* | Optional. Pins the agent's clock, e.g. `2026-03-23T10:30` (see [Demo clock](#demo-clock)) |
 
 The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The policy embedding index is built on first use and cached in `.cache/` (a few cents at most; rebuilt automatically if the PDF changes).
@@ -94,13 +95,13 @@ The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The polic
 ```bash
 python app_cli.py                      # interactive terminal chat
 streamlit run app_streamlit.py         # web chat UI (http://localhost:8501)
-pytest                                 # 49 deterministic tests (no network, no API key needed)
+pytest                                 # 60 deterministic tests (no network, no API key needed)
 RUN_LIVE=1 pytest tests/test_scenarios.py   # 8 live scenario checks against the real model
 ```
 
 PowerShell equivalent for the live tests: `$env:RUN_LIVE=1; pytest tests/test_scenarios.py`.
 
-CLI commands inside the chat: `/config` (change provider/key/model), `/reset` (new conversation), `/save [path]` (export the transcript as Markdown), `/tools` (toggle the tool-call trace), `/quit`.
+CLI commands inside the chat: `/history` (list saved conversations), `/resume N`, `/delete N`, `/config` (change provider/key/model), `/reset` (new conversation), `/save [path]` (export the transcript as Markdown), `/tools` (toggle the tool-call trace), `/quit`.
 
 Scripted run (used to produce the example conversations):
 
@@ -108,6 +109,19 @@ Scripted run (used to produce the example conversations):
 AGENT_NOW=2026-03-23T10:30 python app_cli.py --script demo_scripts/01_catalog_and_price.txt \
     --save conversations/01_catalog_and_price.md --title "Example 1"
 ```
+
+### Conversation history
+
+Conversations are **saved automatically** (interactive CLI and Streamlit) to a local SQLite file, `logs/conversations.db` (git-ignored, standard library only — no extra dependency). Each turn stores what the customer saw, which tools were called, and the exact context messages the agent used, so a conversation can be **resumed** and the model continues with the same context (e.g. "and the PIX price of *that* guitar?" still works after reopening).
+
+- **Streamlit:** sidebar → *Conversas anteriores* lists the latest conversations (title = first message); click to reopen and continue, `×` deletes one. The *Salvar histórico* toggle turns saving off for the session.
+- **CLI:** `/history` lists them, `/resume 2` reopens the second one, `/delete 2` removes it. Scripted runs (`--script`, used for the example conversations) are never saved.
+- **Opt out globally:** `SAVE_HISTORY=0` in `.env`.
+- Only successful turns are saved. API keys are never written to the database.
+
+> **Privacy.** Saved conversations can contain personal data (e-mail, phone, order details) — the manual itself references the LGPD. The file stays on your machine and every conversation can be deleted, but **the app has no user login**: if it were deployed publicly, every visitor would see every saved conversation. Treat history as a local/staff feature until real authentication and per-user separation exist (see limitations).
+
+![History](docs/ui-history.png)
 
 ### Demo clock
 
@@ -205,7 +219,7 @@ The prompt was iterated by running scripted conversations and reading the transc
 | Home | Conversation |
 |---|---|
 | ![Home](docs/ui-home.png) | ![Chat](docs/ui-chat.png) |
-- **History:** kept in memory per session (the full turn, including tool calls/results, so follow-ups like "and the PIX price?" work). It is trimmed by whole turns when it gets long, and a failed turn (API error) is rolled back so the conversation is never left in a broken state. Persisting history across restarts was not needed for a prototype — see limitations.
+- **History:** the agent keeps the full turn (including tool calls/results) in memory so follow-ups like "and the PIX price?" work; it is trimmed by whole turns when long, and a failed turn (API error) is rolled back so the conversation is never left in a broken state. Turns are also persisted to **SQLite** ([`history.py`](src/emporio_agent/history.py)) so conversations survive restarts and can be resumed: SQLite is in the standard library, needs no server, and is plenty for a single-machine prototype. Each turn stores the display text plus the exact context messages it added, which makes resuming exact rather than approximate.
 
 ### Data handling and assumptions
 
@@ -247,7 +261,8 @@ src/emporio_agent/
   data/catalog.py           products, promotions, orders, business rules
   policies/ingest.py        PDF -> section chunks
   policies/retriever.py     embeddings index + search (keyword fallback)
-tests/                      49 unit tests (mocked LLM) + 8 live scenario tests
+  history.py                SQLite conversation history (save, list, resume, delete)
+tests/                      60 unit tests (mocked LLM) + 8 live scenario tests
 conversations/              5 example conversations (Markdown)
 demo_scripts/               the customer messages used to generate them
 ```
@@ -259,7 +274,7 @@ demo_scripts/               the customer messages used to generate them
 **Limitations**
 - **No real authentication.** E-mail/phone knowledge is a weak identity check (anyone who knows both could read an order). A real deployment should verify through the WhatsApp number of the conversation or a one-time code.
 - **Prototype scope of actions.** Mel cannot create returns, change orders or take payments; it explains rules and hands off to humans. Complaints are written to a local JSONL file, not a ticketing system.
-- **Conversation history is in memory only** (lost on restart; not shared across processes), and there is no per-customer memory.
+- **Saved history has no access control** (no login, one shared local file; see the privacy note) and no retention policy or encryption at rest. There is no per-customer memory across conversations.
 - **Search is keyword-based over a small catalog.** Descriptions are only searched as a fallback, and a query like "amplificador" can match instruments whose description mentions an amplified preamp. Natural-language requests such as "something for a beginner who likes jazz" rely on the model translating them into filters.
 - **Hallucination is mitigated, not eliminated.** Numbers come from tools and the prompt forbids answering from memory, but the model can still phrase things loosely (e.g. it sometimes cites a section number from memory). Evaluation is a small set of scenario tests, not a statistical benchmark.
 - **No streaming, rate limiting or cost tracking**; one OpenAI call per loop iteration (max 6 iterations per message).
@@ -269,7 +284,7 @@ demo_scripts/               the customer messages used to generate them
 
 **With more time**
 1. **WhatsApp Business API integration** (webhook behind FastAPI) with the sender's phone number as the identity signal, plus handoff to a human agent with the conversation summary.
-2. **Persistent storage** (SQLite/Postgres) for conversations, complaints and an audit log of tool calls; real ticketing integration.
+2. **Production-grade storage:** Postgres with per-user authentication, retention/anonymisation rules, an audit log of tool calls, and real ticketing for complaints (history today is a local SQLite file).
 3. **A proper evaluation harness:** a larger labelled set of questions with LLM-as-judge for groundedness/tone, regression runs on every prompt/model change, and red-team cases for prompt injection and data exfiltration.
 4. **Hybrid retrieval** (BM25 + embeddings + reranker) and a vector store if the policy corpus or catalog grows; semantic product search over descriptions/specs.
 5. **Observability:** tracing (e.g. Langfuse/OpenTelemetry), latency/cost dashboards, and feedback capture from the support team.
