@@ -16,9 +16,8 @@ from emporio_agent.agent import Agent  # noqa: E402
 from emporio_agent.llm_setup import PRESETS, Settings, is_configured, load_settings  # noqa: E402
 from emporio_agent.store_hours import store_status  # noqa: E402
 
-GREETING = ("Oi! Eu sou a **Mel**, assistente virtual da Empório da Música 🎸\n\n"
-            "Posso te ajudar com **preços e estoque**, **promoções**, **status de pedidos** e as "
-            "**políticas da loja**. Como posso ajudar hoje?")
+GREETING = ("Oi! Eu sou a **Mel**, assistente virtual da Empório da Música 🎸 Posso ajudar com **preços e estoque**, "
+            "**promoções**, **pedidos** e **políticas da loja**. Como posso ajudar?")
 
 SUGGESTIONS = [
     ("🎸", "Violões até R$ 1000", "Quais opções de violões vocês têm disponíveis custando até R$1000?"),
@@ -34,13 +33,14 @@ NAVY, AMBER = "#16324F", "#E8912D"
 CSS = f"""
 <style>
 /* ---------- layout ---------- */
-.block-container {{ max-width: 860px; padding-top: 1.4rem; padding-bottom: 6rem; }}
+.block-container {{ max-width: 860px; padding-top: 3rem; padding-bottom: 1.5rem; }}
+header[data-testid="stHeader"] {{ background: transparent; }}
 footer, #MainMenu {{ visibility: hidden; }}
 
 /* ---------- hero ---------- */
 .hero {{
   background: linear-gradient(135deg, {NAVY} 0%, #24507C 100%);
-  border-radius: 22px; padding: 1.5rem 1.7rem; color: #fff; margin-bottom: 1.1rem;
+  border-radius: 20px; padding: 1.05rem 1.4rem 1.1rem; color: #fff; margin-bottom: .9rem;
   box-shadow: 0 10px 30px rgba(22, 50, 79, .22); position: relative; overflow: hidden;
 }}
 .hero::after {{
@@ -49,13 +49,13 @@ footer, #MainMenu {{ visibility: hidden; }}
 }}
 .hero-row {{ display: flex; align-items: center; gap: 1rem; }}
 .hero-logo {{
-  width: 58px; height: 58px; border-radius: 16px; background: {AMBER}; display: grid; place-items: center;
-  font-size: 1.9rem; box-shadow: 0 4px 12px rgba(0,0,0,.25); flex: none;
+  width: 50px; height: 50px; border-radius: 14px; background: {AMBER}; display: grid; place-items: center;
+  font-size: 1.6rem; box-shadow: 0 4px 12px rgba(0,0,0,.25); flex: none;
 }}
-.hero h1 {{ margin: 0; padding: 0; font-size: 1.55rem; line-height: 1.2; color: #fff; font-weight: 750; }}
+.hero h1 {{ margin: 0; padding: 0; font-size: 1.4rem; line-height: 1.2; color: #fff; font-weight: 750; }}
 .hero p {{ margin: .15rem 0 0; opacity: .85; font-size: .95rem; }}
 .pill {{
-  display: inline-flex; align-items: center; gap: .45rem; margin-top: .9rem; padding: .28rem .8rem;
+  display: inline-flex; align-items: center; gap: .45rem; margin-top: .7rem; padding: .25rem .75rem;
   border-radius: 999px; background: rgba(255,255,255,.14); font-size: .82rem; backdrop-filter: blur(4px);
 }}
 .dot {{ width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: .1rem; }}
@@ -222,9 +222,9 @@ prompt = st.session_state.pop("pending_prompt", None) or typed
 
 if len(st.session_state.messages) == 1 and not prompt:
     st.markdown('<div class="section-label">Comece por aqui</div>', unsafe_allow_html=True)
-    for row in range(0, len(SUGGESTIONS), 2):
-        cols = st.columns(2)
-        for col, (icon, label, text) in zip(cols, SUGGESTIONS[row:row + 2]):
+    for row in range(0, len(SUGGESTIONS), 3):
+        cols = st.columns(3)
+        for col, (icon, label, text) in zip(cols, SUGGESTIONS[row:row + 3]):
             if col.button(f"{icon}  {label}", key=f"sug_{label}", use_container_width=True):
                 st.session_state.pending_prompt = text
                 st.rerun()
