@@ -52,6 +52,20 @@ python app_cli.py
 
 You do not have to edit any file by hand (the key is typed hidden), but you can: `cp .env.example .env` (PowerShell: `Copy-Item .env.example .env`) and fill it in.
 
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'rich'` (or another package) | The packages went to a different Python than the one running the app. Install with **`python -m pip install -r requirements.txt`** while the venv is active (the prompt shows `(.venv)`); check with `python -c "import sys; print(sys.prefix)"` — it must end in `.venv`. If in doubt, delete `.venv` and recreate it. |
+| `OSError: [WinError 206] ... filename too long` during `pip install` (Windows) | Windows' 260-character path limit: Streamlit ships deeply nested files. Clone the project to a **short path** (e.g. `C:\proj\emporio`) or enable long paths (`New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force`, admin PowerShell, then reopen the terminal). |
+| `Activate.ps1 cannot be loaded because running scripts is disabled` (PowerShell) | Run `Set-ExecutionPolicy -Scope Process Bypass`, then activate again. |
+| `streamlit` is not recognized | Use `python -m streamlit run app_streamlit.py`. |
+| `401 Incorrect API key` / "API key rejected" | The key is missing, a placeholder or invalid. Run `python app_cli.py` and use `/config`, or fill the Streamlit sidebar. |
+| A package fails to install / behaves differently | `requirements.txt` is unpinned. `requirements-lock.txt` lists the exact versions this project was tested with (Python 3.12, Windows): `python -m pip install -r requirements-lock.txt`. |
+| Times differ by one hour from my clock | Times are shown in the store's time zone (Campo Grande). Set `DISPLAY_TZ=local` in `.env`. |
+
+Only the **CLI** is needed to evaluate the agent; Streamlit is an optional extra UI.
+
 ### Choosing a provider and model
 
 The agent talks to any provider that exposes an **OpenAI-compatible Chat Completions API with tool calling**. You can set it up three ways:
