@@ -29,6 +29,7 @@ class Reply:
     text: str
     tool_calls: list[ToolTrace] = field(default_factory=list)
     error: str | None = None  # operator-facing hint when the provider call failed
+    messages: list[dict] = field(default_factory=list)  # context messages added in this turn (for persistence)
 
 
 class Agent:
@@ -44,6 +45,11 @@ class Agent:
 
     def reset(self) -> None:
         self.history.clear()
+
+    def load_history(self, messages: list[dict]) -> None:
+        """Restore the context of a saved conversation so the model continues where it stopped."""
+        self.history = list(messages)
+        self._trim_history()
 
     def _trim_history(self) -> None:
         """Drop the oldest whole turns, always restarting at a user message so tool-call pairs stay intact."""
@@ -79,8 +85,9 @@ class Agent:
                 if not msg.tool_calls:
                     text = (msg.content or "").strip() or FALLBACK_REPLY
                     self.history.append({"role": "assistant", "content": text})
+                    delta = list(self.history[checkpoint:])  # taken before trimming drops old turns
                     self._trim_history()
-                    return Reply(text, traces)
+                    return Reply(text, traces, messages=delta)
 
                 self.history.append({
                     "role": "assistant", "content": msg.content,
