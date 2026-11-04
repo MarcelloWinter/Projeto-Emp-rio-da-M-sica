@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import Reply, ToolTrace
-from .config import LOGS_DIR, TIMEZONE
+from .config import LOGS_DIR, stamp
 
 DB_PATH = LOGS_DIR / "conversations.db"
 TITLE_MAX = 60
@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     seq INTEGER NOT NULL, user_text TEXT NOT NULL, reply_text TEXT NOT NULL,
-    tools TEXT NOT NULL, messages TEXT NOT NULL, created_at TEXT NOT NULL);
+    tools TEXT NOT NULL, messages TEXT NOT NULL, created_at TEXT NOT NULL,
+    asked_at TEXT, answered_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_turns_conv ON turns(conversation_id, seq);
 """
 
@@ -45,6 +46,8 @@ class StoredTurn:
     reply: str
     tools: list[ToolTrace]
     messages: list[dict] = field(default_factory=list)
+    asked_at: str = ""  # when the customer wrote
+    answered_at: str = ""  # when Mel answered
 
 
 @dataclass
@@ -59,9 +62,7 @@ class ConversationInfo:
         return datetime.fromisoformat(self.updated_at).strftime("%d/%m %H:%M")
 
 
-def _stamp() -> str:
-    # real wall-clock time on purpose: the log records when things actually happened (not the pinned demo clock)
-    return datetime.now(TIMEZONE).isoformat(timespec="microseconds")
+_stamp = stamp  # real wall-clock on purpose: the log records when things actually happened (not the demo clock)
 
 
 class ConversationStore:
@@ -70,6 +71,10 @@ class ConversationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.executescript(SCHEMA)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(turns)")}
+            for col in ("asked_at", "answered_at"):  # databases created before timestamps were tracked
+                if col not in columns:
+                    db.execute(f"ALTER TABLE turns ADD COLUMN {col} TEXT")
 
     def _db(self):
         con = sqlite3.connect(self.path)
@@ -86,12 +91,13 @@ class ConversationStore:
     def add_turn(self, conv_id: str, user: str, reply: Reply) -> None:
         with self._db() as db:
             seq = db.execute("SELECT COUNT(*) FROM turns WHERE conversation_id = ?", (conv_id,)).fetchone()[0]
-            db.execute("INSERT INTO turns (conversation_id, seq, user_text, reply_text, tools, messages, created_at) "
-                       "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            db.execute("INSERT INTO turns (conversation_id, seq, user_text, reply_text, tools, messages, created_at, "
+                       "asked_at, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        (conv_id, seq, user, reply.text,
                         json.dumps([{"name": t.name, "arguments": t.arguments} for t in reply.tool_calls],
                                    ensure_ascii=False),
-                        json.dumps(reply.messages, ensure_ascii=False, default=str), _stamp()))
+                        json.dumps(reply.messages, ensure_ascii=False, default=str), _stamp(),
+                        reply.asked_at or _stamp(), reply.answered_at or _stamp()))
             if seq == 0:
                 title = " ".join(user.split())
                 title = title if len(title) <= TITLE_MAX else title[:TITLE_MAX - 1].rstrip() + "…"
@@ -108,10 +114,11 @@ class ConversationStore:
 
     def load(self, conv_id: str) -> list[StoredTurn]:
         with self._db() as db:
-            rows = db.execute("SELECT user_text, reply_text, tools, messages FROM turns "
+            rows = db.execute("SELECT user_text, reply_text, tools, messages, COALESCE(asked_at, created_at), "
+                              "COALESCE(answered_at, created_at) FROM turns "
                               "WHERE conversation_id = ? ORDER BY seq", (conv_id,)).fetchall()
         return [StoredTurn(u, r, [ToolTrace(t["name"], t["arguments"], "") for t in json.loads(tools)],
-                           json.loads(msgs)) for u, r, tools, msgs in rows]
+                           json.loads(msgs), asked, answered) for u, r, tools, msgs, asked, answered in rows]
 
     def delete(self, conv_id: str) -> None:
         with self._db() as db:

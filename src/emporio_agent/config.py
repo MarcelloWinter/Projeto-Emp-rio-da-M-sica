@@ -29,3 +29,38 @@ def now():
     if override:
         return datetime.fromisoformat(override).replace(tzinfo=TIMEZONE)
     return datetime.now(TIMEZONE)
+
+
+def stamp() -> str:
+    """Real wall-clock time (ISO, microseconds, store timezone). Used to log when interactions actually happened;
+    unlike now(), it ignores the AGENT_NOW demo clock."""
+    from datetime import datetime
+
+    return datetime.now(TIMEZONE).isoformat(timespec="microseconds")
+
+
+def display_timezone():
+    """Timezone used to *show* times. Default: the store's (America/Campo_Grande, UTC-4). Set DISPLAY_TZ to an IANA
+    name (e.g. America/Sao_Paulo) or to "local" to use this computer's timezone. Stored timestamps keep their offset."""
+    name = os.getenv("DISPLAY_TZ", "").strip()
+    if not name:
+        return TIMEZONE
+    if name.lower() == "local":
+        from datetime import datetime
+
+        return datetime.now().astimezone().tzinfo
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return TIMEZONE
+
+
+def format_when(iso: str) -> str:
+    """'14:32' for today, '03/11 14:32' otherwise (in the display timezone)."""
+    from datetime import datetime
+
+    if not iso:
+        return ""
+    tz = display_timezone()
+    moment = datetime.fromisoformat(iso).astimezone(tz)
+    return moment.strftime("%H:%M") if moment.date() == datetime.now(tz).date() else moment.strftime("%d/%m %H:%M")

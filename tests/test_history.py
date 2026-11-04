@@ -131,3 +131,80 @@ def test_api_key_is_never_written_to_the_database(store):
     raw = store.path.read_bytes()
     assert b"sk-" not in raw
     assert json.loads(json.dumps(store.load(conv)[0].messages))  # serialisable
+
+
+def test_turn_records_when_asked_and_answered(store):
+    conv = store.create()
+    r = reply("ok")
+    r.asked_at, r.answered_at = "2026-03-23T10:30:00.000001-04:00", "2026-03-23T10:30:03.500000-04:00"
+    store.add_turn(conv, "oi", r)
+    t = store.load(conv)[0]
+    assert (t.asked_at, t.answered_at) == (r.asked_at, r.answered_at)
+
+
+def test_agent_stamps_asked_before_answered_even_on_failure():
+    from openai import OpenAIError
+
+    ok = make_agent(FakeClient(["r"])).chat("m")
+    assert ok.asked_at and ok.answered_at and ok.asked_at <= ok.answered_at
+
+    class Boom:
+        chat = SimpleNamespace(completions=SimpleNamespace(create=lambda **_: (_ for _ in ()).throw(OpenAIError("x"))))
+
+    failed = make_agent(Boom()).chat("m")
+    assert failed.asked_at and failed.answered_at
+
+
+def test_turns_saved_without_timestamps_fall_back_to_created_at(store):
+    conv = store.create()
+    store.add_turn(conv, "oi", reply("olá"))  # Reply() built by hand: no asked_at/answered_at
+    t = store.load(conv)[0]
+    assert t.asked_at and t.answered_at
+
+
+def test_database_created_before_timestamps_is_migrated(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, provider TEXT, model TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE turns (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, seq INTEGER NOT NULL,
+            user_text TEXT NOT NULL, reply_text TEXT NOT NULL, tools TEXT NOT NULL, messages TEXT NOT NULL,
+            created_at TEXT NOT NULL);
+        INSERT INTO conversations VALUES ('c1', 'antiga', 'openai', 'm', '2026-01-05T09:00:00-04:00', '2026-01-05T09:00:00-04:00');
+        INSERT INTO turns (conversation_id, seq, user_text, reply_text, tools, messages, created_at)
+            VALUES ('c1', 0, 'oi', 'olá', '[]', '[]', '2026-01-05T09:00:00-04:00');
+    """)
+    con.commit()
+    con.close()
+    migrated = ConversationStore(path)
+    t = migrated.load("c1")[0]
+    assert t.asked_at == t.answered_at == "2026-01-05T09:00:00-04:00"
+    migrated.add_turn("c1", "de novo", reply("sim"))  # new writes work on the migrated schema
+    assert len(migrated.load("c1")) == 2
+
+
+def test_format_when_shows_only_the_time_for_today():
+    import re
+
+    from emporio_agent.config import format_when, stamp
+
+    assert re.fullmatch(r"\d\d:\d\d", format_when(stamp()))
+    assert format_when("2020-01-05T14:32:00-04:00") == "05/01 14:32"
+    assert format_when("") == ""
+
+
+def test_display_timezone_can_be_changed(monkeypatch):
+    from emporio_agent.config import format_when
+
+    iso = "2020-01-05T14:32:00-04:00"  # Campo Grande, UTC-4
+    monkeypatch.delenv("DISPLAY_TZ", raising=False)
+    assert format_when(iso) == "05/01 14:32"
+    monkeypatch.setenv("DISPLAY_TZ", "America/Sao_Paulo")  # UTC-3 (Brazil has no DST since 2019) -> 15:32
+    assert format_when(iso) == "05/01 15:32"
+    monkeypatch.setenv("DISPLAY_TZ", "UTC")
+    assert format_when(iso) == "05/01 18:32"
+    monkeypatch.setenv("DISPLAY_TZ", "not/a-zone")  # invalid -> falls back to the store timezone
+    assert format_when(iso) == "05/01 14:32"

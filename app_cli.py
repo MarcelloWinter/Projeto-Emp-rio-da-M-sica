@@ -21,7 +21,7 @@ from rich.console import Console  # noqa: E402
 from rich.markdown import Markdown  # noqa: E402
 
 from emporio_agent.agent import Agent  # noqa: E402
-from emporio_agent.config import now  # noqa: E402
+from emporio_agent.config import display_timezone, format_when  # noqa: E402
 from emporio_agent.history import ConversationStore, history_enabled  # noqa: E402
 from emporio_agent.llm_setup import interactive_setup, is_configured, load_settings  # noqa: E402
 
@@ -35,16 +35,17 @@ def _short(result: str, limit: int = 160) -> str:
 
 def render_transcript(turns: list[dict], title: str | None) -> str:
     lines = [f"# {title or 'Conversation with Mel (Empório da Música)'}", "",
-             f"_Exported {now():%Y-%m-%d %H:%M} (store time)._", ""]
+             f"_Exported {datetime.now(display_timezone()):%Y-%m-%d %H:%M}._", ""]
     lines.append(f"**Mel:** {GREETING}\n")
     for t in turns:
-        lines.append(f"**Customer:** {t['user']}\n")
+        stamp = lambda iso: f" _({format_when(iso)})_" if iso else ""  # noqa: E731
+        lines.append(f"**Customer**{stamp(t.get('asked_at'))}**:** {t['user']}\n")
         if t["tools"]:
             lines.append("<details><summary>Tools called</summary>\n")
             for tc in t["tools"]:
                 lines.append(f"- `{tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})`")
             lines.append("\n</details>\n")
-        lines.append(f"**Mel:** {t['reply']}\n")
+        lines.append(f"**Mel**{stamp(t.get('answered_at'))}**:** {t['reply']}\n")
     return "\n".join(lines)
 
 
@@ -83,11 +84,13 @@ def main() -> None:
 
     def ask(text: str) -> None:
         reply = agent.chat(text)
-        turns.append({"user": text, "reply": reply.text, "tools": reply.tool_calls})
+        turns.append({"user": text, "reply": reply.text, "tools": reply.tool_calls,
+                      "asked_at": reply.asked_at, "answered_at": reply.answered_at})
         if show_tools:
             for tc in reply.tool_calls:
                 console.print(f"  [dim]🔧 {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})[/dim]")
         console.print("[bold magenta]Mel:[/bold magenta]", Markdown(reply.text))
+        console.print(f"[dim]🕒 enviada {format_when(reply.asked_at)} · respondida {format_when(reply.answered_at)}[/dim]")
         if reply.error:
             console.print(f"[yellow]⚠ {reply.error}[/yellow]")
         if store and reply.messages:  # only successful turns are saved
@@ -140,12 +143,14 @@ def main() -> None:
             elif (chosen := pick(arg)) and cmd == "/resume":
                 saved = store.load(chosen.id)
                 agent.load_history([m for t in saved for m in t.messages])
-                turns[:] = [{"user": t.user, "reply": t.reply, "tools": t.tools} for t in saved]
+                turns[:] = [{"user": t.user, "reply": t.reply, "tools": t.tools,
+                             "asked_at": t.asked_at, "answered_at": t.answered_at} for t in saved]
                 current["id"] = chosen.id
                 console.print(f"[dim]Resumed: {chosen.title}[/dim]")
                 for t in saved:
-                    console.print(f"[bold cyan]Você:[/bold cyan] {t.user}")
+                    console.print(f"[bold cyan]Você:[/bold cyan] {t.user}  [dim]{format_when(t.asked_at)}[/dim]")
                     console.print("[bold magenta]Mel:[/bold magenta]", Markdown(t.reply))
+                    console.print(f"[dim]🕒 {format_when(t.answered_at)}[/dim]")
             elif chosen:  # /delete
                 store.delete(chosen.id)
                 if current["id"] == chosen.id:

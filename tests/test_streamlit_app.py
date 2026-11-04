@@ -52,3 +52,20 @@ def test_unconfigured_app_shows_setup_help_and_still_offers_settings(monkeypatch
     assert not at.exception
     assert any("Falta só um passo" in m.value for m in at.markdown)
     assert [s.label for s in at.sidebar.selectbox] == ["Provedor", "Modelo"]
+
+
+def test_messages_show_when_they_were_sent_and_answered(monkeypatch, app):
+    from emporio_agent.agent import Agent, Reply
+    from emporio_agent.config import stamp
+
+    def fake_chat(self, text):
+        return Reply("Resposta de teste", messages=[{"role": "user", "content": text},
+                                                    {"role": "assistant", "content": "Resposta de teste"}],
+                     asked_at=stamp(), answered_at=stamp())
+
+    monkeypatch.setattr(Agent, "chat", fake_chat)
+    app.button(key="sug_Promoções ativas").click().run()
+    assert not app.exception
+    times = [m.value for m in app.markdown if m.value.startswith('<div class="msg-time">')]
+    assert len(times) == 2 and all("🕒" in t for t in times)  # one for the customer, one for Mel
+    assert app.session_state.messages[-1]["at"] and app.session_state.messages[-2]["at"]

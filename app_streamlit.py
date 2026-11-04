@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 import streamlit as st  # noqa: E402
 
 from emporio_agent.agent import Agent  # noqa: E402
+from emporio_agent.config import format_when, stamp  # noqa: E402
 from emporio_agent.history import ConversationStore, history_enabled  # noqa: E402
 from emporio_agent.llm_setup import (PRESETS, Settings, is_configured, list_models, load_settings,  # noqa: E402
                                      model_choices)
@@ -91,6 +92,10 @@ div[data-testid="stChatMessage"]:has(.role-assistant) {{
   border-left: 4px solid {AMBER}; max-width: 94%;
 }}
 
+/* ---------- message time ---------- */
+.msg-time {{ font-size: .72rem; color: #9A8B76; margin-top: .25rem; }}
+div[data-testid="stChatMessage"]:has(.role-user) .msg-time {{ text-align: right; }}
+
 /* ---------- tool pills ---------- */
 .tools {{ display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .55rem; }}
 .tool {{ font-size: .74rem; padding: .16rem .6rem; border-radius: 999px; background: #FFF4E3; color: #9A5B0B;
@@ -135,16 +140,18 @@ def tool_pills(tool_calls) -> None:
             st.code(f"{tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})", language="python")
 
 
-def write_message(role: str, text: str) -> None:
+def write_message(role: str, text: str, at: str = "") -> None:
     """Render chat text safely: no raw HTML, and '$' escaped so prices like R$ 2.199,00 are not read as LaTeX."""
     st.markdown(f'<span class="role-{role}"></span>', unsafe_allow_html=True)  # hidden marker used by the CSS
     st.markdown(html.escape(text, quote=False).replace("$", "\\$"), unsafe_allow_html=True)
+    if at:  # when this message was sent / answered (real clock, store timezone)
+        st.markdown(f'<div class="msg-time">🕒 {html.escape(at)}</div>', unsafe_allow_html=True)
 
 
 def render_message(m: dict, show_tools: bool) -> None:
     avatar = "🎸" if m["role"] == "assistant" else "🙂"
     with st.chat_message(m["role"], avatar=avatar):
-        write_message(m["role"], m["content"])
+        write_message(m["role"], m["content"], m.get("at", ""))
         if show_tools and m["tools"]:
             tool_pills(m["tools"])
 
@@ -263,8 +270,9 @@ if resume_id := st.session_state.pop("resume_id", None):  # reopen a saved conve
     saved = get_store().load(resume_id)
     agent.load_history([m for t in saved for m in t.messages])
     st.session_state.messages = [{"role": "assistant", "content": GREETING, "tools": []}] + [
-        m for t in saved for m in ({"role": "user", "content": t.user, "tools": []},
-                                   {"role": "assistant", "content": t.reply, "tools": t.tools})]
+        m for t in saved for m in ({"role": "user", "content": t.user, "tools": [], "at": format_when(t.asked_at)},
+                                   {"role": "assistant", "content": t.reply, "tools": t.tools,
+                                    "at": format_when(t.answered_at)})]
     st.session_state.conv_id = resume_id
 
 # ------------------------------------------------------------------ the chat
@@ -285,18 +293,20 @@ for m in st.session_state.messages:
     render_message(m, show_tools)
 
 if prompt:
-    user_msg = {"role": "user", "content": prompt, "tools": []}
+    asked_at = stamp()
+    user_msg = {"role": "user", "content": prompt, "tools": [], "at": format_when(asked_at)}
     st.session_state.messages.append(user_msg)
     render_message(user_msg, show_tools)
     with st.chat_message("assistant", avatar="🎸"):
         with st.spinner("Mel está digitando…"):
             reply = agent.chat(prompt)
-        write_message("assistant", reply.text)
+        write_message("assistant", reply.text, format_when(reply.answered_at))
         if reply.error:
             st.warning(reply.error)
         if show_tools and reply.tool_calls:
             tool_pills(reply.tool_calls)
-    st.session_state.messages.append({"role": "assistant", "content": reply.text, "tools": reply.tool_calls})
+    st.session_state.messages.append({"role": "assistant", "content": reply.text, "tools": reply.tool_calls,
+                                      "at": format_when(reply.answered_at)})
     if st.session_state.save_history and reply.messages:  # only successful turns are saved
         first_turn = st.session_state.conv_id is None
         if first_turn:

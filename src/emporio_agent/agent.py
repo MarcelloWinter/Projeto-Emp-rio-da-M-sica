@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from openai import BadRequestError, OpenAI, OpenAIError
 
-from .config import MAX_HISTORY_MESSAGES, MAX_TOOL_ITERATIONS
+from .config import MAX_HISTORY_MESSAGES, MAX_TOOL_ITERATIONS, stamp
 from .llm_setup import Settings, describe_error, load_settings, make_client
 from .policies.retriever import PolicyRetriever
 from .prompts import build_system_prompt
@@ -30,6 +30,8 @@ class Reply:
     tool_calls: list[ToolTrace] = field(default_factory=list)
     error: str | None = None  # operator-facing hint when the provider call failed
     messages: list[dict] = field(default_factory=list)  # context messages added in this turn (for persistence)
+    asked_at: str = ""  # when the customer's message arrived (ISO, real clock)
+    answered_at: str = ""  # when this reply was produced
 
 
 class Agent:
@@ -75,6 +77,7 @@ class Agent:
             return self.client.chat.completions.create(**kwargs)
 
     def chat(self, user_message: str) -> Reply:
+        asked_at = stamp()
         checkpoint = len(self.history)
         self.history.append({"role": "user", "content": user_message})
         traces: list[ToolTrace] = []
@@ -87,7 +90,7 @@ class Agent:
                     self.history.append({"role": "assistant", "content": text})
                     delta = list(self.history[checkpoint:])  # taken before trimming drops old turns
                     self._trim_history()
-                    return Reply(text, traces, messages=delta)
+                    return Reply(text, traces, messages=delta, asked_at=asked_at, answered_at=stamp())
 
                 self.history.append({
                     "role": "assistant", "content": msg.content,
@@ -107,6 +110,6 @@ class Agent:
         except OpenAIError as exc:
             log.warning("LLM request failed: %s", exc)
             del self.history[checkpoint:]
-            return Reply(FALLBACK_REPLY, traces, error=describe_error(exc))
+            return Reply(FALLBACK_REPLY, traces, error=describe_error(exc), asked_at=asked_at, answered_at=stamp())
         del self.history[checkpoint:]  # roll back the incomplete turn so the next message starts clean
-        return Reply(FALLBACK_REPLY, traces)
+        return Reply(FALLBACK_REPLY, traces, asked_at=asked_at, answered_at=stamp())
