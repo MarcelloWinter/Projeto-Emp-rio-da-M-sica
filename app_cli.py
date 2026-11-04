@@ -4,7 +4,8 @@ Interactive:  python app_cli.py
 Scripted:     python app_cli.py --script demo.txt --save conversations/01_x.md --title "..."
               (one customer message per line; blank lines and lines starting with # are ignored)
 
-Commands inside the chat: /reset (new conversation), /save [path] (export transcript), /tools (toggle tool trace), /quit
+Commands inside the chat: /config (change provider/key/model), /reset (new conversation),
+/save [path] (export transcript), /tools (toggle tool trace), /quit
 """
 import argparse
 import json
@@ -19,6 +20,7 @@ from rich.markdown import Markdown  # noqa: E402
 
 from emporio_agent.agent import Agent  # noqa: E402
 from emporio_agent.config import now  # noqa: E402
+from emporio_agent.llm_setup import interactive_setup, is_configured, load_settings  # noqa: E402
 
 console = Console()
 GREETING = "Oi! Eu sou a Mel, assistente virtual da Empório da Música 🎸 Como posso te ajudar hoje?"
@@ -57,7 +59,15 @@ def main() -> None:
     parser.add_argument("--title", help="title for the exported transcript")
     args = parser.parse_args()
 
-    agent = Agent()
+    settings = load_settings()
+    if not is_configured(settings):
+        if args.script or not sys.stdin.isatty():
+            console.print("[red]No LLM configured. Run `python app_cli.py` interactively, or set LLM_API_KEY "
+                          "(and LLM_PROVIDER / LLM_MODEL) in .env.[/red]")
+            sys.exit(1)
+        console.print("[yellow]No valid API key found. Let's configure the model provider.[/yellow]")
+        settings = interactive_setup(settings)
+    agent = Agent(settings=settings)
     turns: list[dict] = []
     show_tools = True
 
@@ -68,7 +78,10 @@ def main() -> None:
             for tc in reply.tool_calls:
                 console.print(f"  [dim]🔧 {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})[/dim]")
         console.print("[bold magenta]Mel:[/bold magenta]", Markdown(reply.text))
+        if reply.error:
+            console.print(f"[yellow]⚠ {reply.error}[/yellow]")
 
+    console.print(f"[dim]Provider: {settings.label} · model: {settings.model}[/dim]")
     console.print(f"[bold magenta]Mel:[/bold magenta] {GREETING}")
 
     if args.script:
@@ -81,7 +94,7 @@ def main() -> None:
             console.print(f"[green]Saved → {save(turns, args.save, args.title)}[/green]")
         return
 
-    console.print("[dim]/reset · /save [path] · /tools · /quit[/dim]")
+    console.print("[dim]/config · /reset · /save <path> · /tools · /quit[/dim]")
     while True:
         try:
             text = console.input("[bold cyan]Você:[/bold cyan] ").strip()
@@ -95,6 +108,11 @@ def main() -> None:
             agent.reset()
             turns.clear()
             console.print("[dim]Nova conversa iniciada.[/dim]")
+        elif text == "/config":
+            settings = interactive_setup(settings)
+            agent = Agent(settings=settings)
+            turns.clear()
+            console.print(f"[dim]Now using {settings.label} · {settings.model}. New conversation started.[/dim]")
         elif text.startswith("/save"):
             console.print(f"[green]Saved → {save(turns, text[5:].strip() or None, args.title)}[/green]")
         elif text == "/tools":

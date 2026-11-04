@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 
 from openai import OpenAI, OpenAIError
 
-from .config import MAX_HISTORY_MESSAGES, MAX_TOOL_ITERATIONS, OPENAI_MODEL
+from .config import MAX_HISTORY_MESSAGES, MAX_TOOL_ITERATIONS
+from .llm_setup import Settings, describe_error, load_settings, make_client
 from .policies.retriever import PolicyRetriever
 from .prompts import build_system_prompt
 from .tools import TOOL_SCHEMAS, ToolRegistry
@@ -27,14 +28,17 @@ class ToolTrace:
 class Reply:
     text: str
     tool_calls: list[ToolTrace] = field(default_factory=list)
+    error: str | None = None  # operator-facing hint when the provider call failed
 
 
 class Agent:
     def __init__(self, client: OpenAI | None = None, model: str | None = None,
-                 tools: ToolRegistry | None = None):
-        self.client = client or OpenAI()
-        self.model = model or OPENAI_MODEL
-        self.tools = tools or ToolRegistry(retriever=PolicyRetriever(self.client))
+                 tools: ToolRegistry | None = None, settings: Settings | None = None):
+        self.settings = settings or load_settings()
+        self.client = client or make_client(self.settings)
+        self.model = model or self.settings.model
+        self.tools = tools or ToolRegistry(retriever=PolicyRetriever(
+            self.client, embedding_model=self.settings.embedding_model))
         self.history: list[dict] = []
 
     def reset(self) -> None:
@@ -82,7 +86,9 @@ class Agent:
                     traces.append(ToolTrace(call.function.name, args, result))
                     self.history.append({"role": "tool", "tool_call_id": call.id, "content": result})
             log.warning("Tool iteration limit reached")
-        except OpenAIError:
-            log.exception("OpenAI request failed")
+        except OpenAIError as exc:
+            log.warning("LLM request failed: %s", exc)
+            del self.history[checkpoint:]
+            return Reply(FALLBACK_REPLY, traces, error=describe_error(exc))
         del self.history[checkpoint:]  # roll back the incomplete turn so the next message starts clean
         return Reply(FALLBACK_REPLY, traces)
