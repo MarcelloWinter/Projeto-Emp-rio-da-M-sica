@@ -85,6 +85,7 @@ The agent talks to any provider that exposes an **OpenAI-compatible Chat Complet
 | `LLM_BASE_URL` | preset default | Required for `custom` |
 | `LLM_EMBEDDING_MODEL` | preset default (`text-embedding-3-small` for OpenAI, none otherwise) | Embeddings for policy retrieval |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | — | Legacy names, still honoured when the provider is `openai` |
+| `DISPLAY_TZ` | `America/Campo_Grande` | Timezone used to *show* times: any IANA name (e.g. `America/Sao_Paulo`) or `local` for this computer's timezone (see [Conversation history](#conversation-history)) |
 | `SAVE_HISTORY` | `1` | Set to `0` to stop saving conversations (see [Conversation history](#conversation-history)) |
 | `AGENT_NOW` | *(unset)* | Optional. Pins the agent's clock, e.g. `2026-03-23T10:30` (see [Demo clock](#demo-clock)) |
 
@@ -95,7 +96,7 @@ The data lives in [`data/`](data/) (6 CSVs + `politicas_da_loja.pdf`). The polic
 ```bash
 python app_cli.py                      # interactive terminal chat
 streamlit run app_streamlit.py         # web chat UI (http://localhost:8501)
-pytest                                 # 65 deterministic tests (no network, no API key needed)
+pytest                                 # 72 deterministic tests (no network, no API key needed)
 RUN_LIVE=1 pytest tests/test_scenarios.py   # 8 live scenario checks against the real model
 ```
 
@@ -118,6 +119,8 @@ Conversations are **saved automatically** (interactive CLI and Streamlit) to a l
 - **CLI:** `/history` lists them, `/resume 2` reopens the second one, `/delete 2` removes it. Scripted runs (`--script`, used for the example conversations) are never saved.
 - **Opt out globally:** `SAVE_HISTORY=0` in `.env`.
 - Only successful turns are saved. API keys are never written to the database.
+- **Timestamps:** every interaction records *when the customer wrote* (`asked_at`) and *when Mel answered* (`answered_at`), using the real clock (never the `AGENT_NOW` demo clock) with its UTC offset. They are shown under each chat bubble in Streamlit, after each reply in the CLI (`🕒 enviada 14:32 · respondida 14:32`), when resuming a conversation, and in exported transcripts. Older databases are migrated automatically.
+- **Time zone:** times are displayed in the store's zone (Campo Grande, UTC−4) by default. If your computer is in another zone (e.g. Brasília, UTC−3) the displayed hour will differ by an hour from your clock — set `DISPLAY_TZ=local` to show your own. The stored values keep their offset, so nothing is lost either way.
 
 > **Privacy.** Saved conversations can contain personal data (e-mail, phone, order details) — the manual itself references the LGPD. The file stays on your machine and every conversation can be deleted, but **the app has no user login**: if it were deployed publicly, every visitor would see every saved conversation. Treat history as a local/staff feature until real authentication and per-user separation exist (see limitations).
 
@@ -262,7 +265,7 @@ src/emporio_agent/
   policies/ingest.py        PDF -> section chunks
   policies/retriever.py     embeddings index + search (keyword fallback)
   history.py                SQLite conversation history (save, list, resume, delete)
-tests/                      65 unit tests (mocked LLM) + 8 live scenario tests
+tests/                      72 unit tests (mocked LLM) + 8 live scenario tests
 conversations/              5 example conversations (Markdown)
 demo_scripts/               the customer messages used to generate them
 ```
