@@ -34,6 +34,10 @@ customer message
 ### Setup
 
 ```bash
+# 0. get the code (skip if you already have the folder)
+git clone https://github.com/MarcelloWinter/Projeto-Emp-rio-da-M-sica.git
+cd Projeto-Emp-rio-da-M-sica
+
 # 1. create and activate a virtual environment
 python -m venv .venv
 source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
