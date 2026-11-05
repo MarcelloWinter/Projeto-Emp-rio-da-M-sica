@@ -4,8 +4,10 @@ A Python prototype of a text-message customer-service agent for **Empório da M�
 
 - **Customers talk to Mel in Brazilian Portuguese**; code, prompts and documentation are in English.
 - Hybrid architecture: **typed function-calling tools** over the CSV data + **RAG** over the policy PDF.
-- Interfaces: **CLI** and a simple **Streamlit** chat UI.
+- Interfaces: **CLI** and a modern **Streamlit** chat UI.
 - Example conversations are in [`conversations/`](conversations/).
+
+**Beyond the brief:** besides the agent itself, I added what a real user would expect from a chat product — a modern **Streamlit** interface with suggested questions, the choice of **any OpenAI-compatible provider and model** (dropdown), **saved conversation history** you can resume or delete, a **new conversation** button and **timestamps** on every interaction. How I worked and why is in [section 6](#6-use-of-ai-coding-assistants-and-how-i-approached-the-project).
 
 ```
 customer message
@@ -311,16 +313,27 @@ demo_scripts/               the customer messages used to generate them
 
 ---
 
-## 6. Use of AI coding assistants
+## 6. Use of AI coding assistants and how I approached the project
 
-**Tool:** [Claude Code](https://claude.com/claude-code) (VS Code extension), using Claude models (Opus 5.5 for planning, then Sonnet 5.5 for implementation).
+Given the project and the deadline, I chose **[Claude Code](https://claude.com/claude-code)** (VS Code extension) as an acceleration tool, so that I could deliver more than the requested scope. For me, a product that is easy to use and that creates real value for the user matters at least as much as "beautiful code" or technique.
 
-**Workflow:**
-1. **Planning first.** I gave Claude Code the challenge brief and let it read the PDF brief, the policy manual and every CSV in plan mode (no edits allowed). It proposed a development plan, and I answered its clarifying questions on the key decisions — OpenAI as provider, native function calling instead of a framework, CLI + Streamlit, pt-BR replies — before any code was written.
-2. **Data audit.** Claude Code inspected the CSVs and the manual and surfaced the inconsistencies documented in section 3 (mismatched product names/descriptions, order totals, duplicate e-mail, empty categories, conflicting phone numbers) so they could be handled deliberately.
-3. **Incremental implementation with commits per layer:** scaffolding → data layer → policy RAG → agent/CLI → UI and tests → example conversations. Each layer was smoke-tested against the real data/API before moving on.
-4. **Transcript-driven prompt iteration.** I ran scripted conversations, read the outputs, and fed failures back into the next change (e.g. missing 90-day warranty, promotions listed without the original price, mislabelled delivery dates). Fixes went into code when they could be deterministic, into the prompt otherwise.
-5. **Tests as the safety net:** deterministic unit tests (LLM mocked) for the business rules, plus opt-in live tests that check which tools the agent routes to.
-6. **Review:** I reviewed the generated code and the transcripts. AI-written code was not trusted blindly: several first attempts were wrong and were caught by running them (e.g. PDF text extraction returning one word per line, a heading regex missing the "N." format, fuzzy search returning unrelated instruments).
+**My workflow**
+
+1. **Briefing and data.** I started by giving Claude Code the project briefing and the data (the CSVs and the policy manual).
+2. **Planning with Opus 5.5 in plan mode.** Claude Opus 5.5 helped me plan and document what had to be done, giving direction to the development agent that would come next (Claude Sonnet 5.5). In this phase nothing could be edited: it read the files, proposed a plan and asked me clarifying questions, which I answered before any code existed (OpenAI as provider, native function calling instead of a framework, CLI + Streamlit, replies in Brazilian Portuguese).
+3. **Careful review of the plan.** I reviewed what had been planned in detail, pointed out some adjustments, and only then sent it to development.
+4. **From MVP to understanding.** After Sonnet 5.5 produced a Minimum Viable Product (MVP), I studied how it had been built, with a close analysis of the code and the architecture, so that I understand and can defend every technical choice documented in section 3.
+5. **Using the product like a user.** I then started using the Streamlit interface and the CLI for real, looking for product and usability improvements — the things that add value. That is how we got a more modern and clean design, the ability to use **different providers and AI models**, **conversation history** (very present in the AI chat tools we all use, which is what I based it on), and a **new conversation** button, also inspired by those chat tools.
+6. **Thorough testing.** Finally, I ran detailed tests on the tool looking for fine adjustments, possible bugs and problems. I only considered my work finished when the product was ready to be delivered, presented and to demonstrate its value to a client.
+
+**What the AI did, concretely**
+- **Data audit:** it inspected every CSV and the manual and surfaced the inconsistencies documented in section 3 (mismatched product names/descriptions, order totals, a duplicated e-mail, empty categories, conflicting phone numbers), so they could be handled deliberately.
+- **Incremental implementation** with a commit per layer: scaffolding → data layer → policy RAG → agent/CLI → UI and tests → examples → provider/model selection → history → timestamps.
+- **Transcript-driven prompt iteration:** I ran scripted conversations, read the outputs, and fed failures back (e.g. a missing 90-day warranty, promotions listed without the original price, mislabelled delivery dates). Fixes went into code when they could be deterministic, into the prompt otherwise.
+- **Tests as a safety net:** deterministic unit tests (LLM mocked) for the business rules and the UI, plus opt-in live tests that check which tools the agent routes to.
+
+**AI-written code was not trusted blindly.** Running and reviewing it caught real mistakes, for example: PDF text extraction returning one word per line, a heading regex missing the "N." format, fuzzy search returning unrelated instruments, prices being parsed as LaTeX in the chat UI, conversation history leaking between browser sessions, and a UI edit that accidentally deleted the provider/model settings (now covered by regression tests). All were fixed.
 
 The OpenAI API key is kept only in a local, git-ignored `.env` file.
+
+**A word about me.** I hope you like it, and I am available for any questions. I am a person who likes to innovate: besides developing, I like to think outside the box and to deliver the greatest value, a friendly interface and the best possible ROI to the client through AI and software. I am a big enthusiast of Digital Transformation, and this project is an example of a product that goes beyond the requested scope.
